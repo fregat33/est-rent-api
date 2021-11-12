@@ -1,11 +1,13 @@
 package consumer
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"time"
 
-	"github.com/ozonmp/omp-demo-api/internal/app/repo"
-	"github.com/ozonmp/omp-demo-api/internal/model"
+	"github.com/ozonmp/est-rent-api/internal/app/repo"
+	"github.com/ozonmp/est-rent-api/internal/model"
 )
 
 type Consumer interface {
@@ -15,23 +17,15 @@ type Consumer interface {
 
 type consumer struct {
 	n      uint64
-	events chan<- model.SubdomainEvent
+	events chan<- model.RentEvent
 
 	repo repo.EventRepo
 
 	batchSize uint64
 	timeout   time.Duration
 
-	done chan bool
-	wg   *sync.WaitGroup
-}
-
-type Config struct {
-	n         uint64
-	events    chan<- model.SubdomainEvent
-	repo      repo.EventRepo
-	batchSize uint64
-	timeout   time.Duration
+	cancel context.CancelFunc
+	wg     *sync.WaitGroup
 }
 
 func NewDbConsumer(
@@ -39,10 +33,9 @@ func NewDbConsumer(
 	batchSize uint64,
 	consumeTimeout time.Duration,
 	repo repo.EventRepo,
-	events chan<- model.SubdomainEvent) Consumer {
-
+	events chan<- model.RentEvent,
+) Consumer {
 	wg := &sync.WaitGroup{}
-	done := make(chan bool)
 
 	return &consumer{
 		n:         n,
@@ -51,36 +44,41 @@ func NewDbConsumer(
 		repo:      repo,
 		events:    events,
 		wg:        wg,
-		done:      done,
+		cancel:    func() {},
 	}
 }
 
 func (c *consumer) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	c.cancel = cancel
 	for i := uint64(0); i < c.n; i++ {
 		c.wg.Add(1)
+		go c.workerExec(i, ctx)
+	}
+}
 
-		go func() {
-			defer c.wg.Done()
-			ticker := time.NewTicker(c.timeout)
-			for {
-				select {
-				case <-ticker.C:
-					events, err := c.repo.Lock(c.batchSize)
-					if err != nil {
-						continue
-					}
-					for _, event := range events {
-						c.events <- event
-					}
-				case <-c.done:
-					return
-				}
+func (c *consumer) workerExec(workerIdx uint64, ctx context.Context) {
+	defer c.wg.Done()
+	ticker := time.NewTicker(c.timeout)
+	for {
+		select {
+		case <-ticker.C:
+			events, err := c.repo.Lock(c.batchSize)
+			if err != nil {
+				fmt.Printf("Consumer.Start.Lock: error in worker: %v, message: %s\n",
+					workerIdx, err.Error())
+				continue
 			}
-		}()
+			for _, event := range events {
+				c.events <- event
+			}
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
 func (c *consumer) Close() {
-	close(c.done)
+	c.cancel()
 	c.wg.Wait()
 }

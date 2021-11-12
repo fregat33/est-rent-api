@@ -1,11 +1,14 @@
 package producer
 
 import (
+	"context"
+	"fmt"
+	"github.com/ozonmp/est-rent-api/internal/app/repo"
 	"sync"
 	"time"
 
-	"github.com/ozonmp/omp-demo-api/internal/app/sender"
-	"github.com/ozonmp/omp-demo-api/internal/model"
+	"github.com/ozonmp/est-rent-api/internal/app/sender"
+	"github.com/ozonmp/est-rent-api/internal/model"
 
 	"github.com/gammazero/workerpool"
 )
@@ -20,61 +23,76 @@ type producer struct {
 	timeout time.Duration
 
 	sender sender.EventSender
-	events <-chan model.SubdomainEvent
+	events <-chan model.RentEvent
+	repo   repo.EventRepo
 
 	workerPool *workerpool.WorkerPool
 
-	wg   *sync.WaitGroup
-	done chan bool
+	wg     *sync.WaitGroup
+	cancel context.CancelFunc
 }
 
-// todo for students: add repo
 func NewKafkaProducer(
 	n uint64,
 	sender sender.EventSender,
-	events <-chan model.SubdomainEvent,
+	repo repo.EventRepo,
+	events <-chan model.RentEvent,
 	workerPool *workerpool.WorkerPool,
 ) Producer {
 
 	wg := &sync.WaitGroup{}
-	done := make(chan bool)
 
 	return &producer{
 		n:          n,
 		sender:     sender,
 		events:     events,
+		repo:       repo,
 		workerPool: workerPool,
 		wg:         wg,
-		done:       done,
+		cancel:     func() {},
 	}
 }
 
 func (p *producer) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	p.cancel = cancel
 	for i := uint64(0); i < p.n; i++ {
 		p.wg.Add(1)
-		go func() {
-			defer p.wg.Done()
-			for {
-				select {
-				case event := <-p.events:
-					if err := p.sender.Send(&event); err != nil {
-						p.workerPool.Submit(func() {
-							// ...
-						})
-					} else {
-						p.workerPool.Submit(func() {
-							// ...
-						})
-					}
-				case <-p.done:
-					return
-				}
+		go p.workerExec(i, ctx)
+	}
+}
+
+func (p *producer) workerExec(workerIdx uint64, ctx context.Context) {
+	defer p.wg.Done()
+	for {
+		select {
+		case event := <-p.events:
+			if event.Type != model.Created {
+				continue //TODO handle all types with guarantee
 			}
-		}()
+
+			if err := p.sender.Send(&event); err != nil {
+				p.workerPool.Submit(func() {
+					if errInner := p.repo.Unlock([]uint64{event.ID}); errInner != nil {
+						fmt.Printf("Producer.procEvents.Unlock: error in worker: %v, in eventID: %d, eventType: %v, message: %s\n",
+							workerIdx, event.ID, event.Type, errInner.Error())
+					}
+				})
+			} else {
+				p.workerPool.Submit(func() {
+					if errInner := p.repo.Remove([]uint64{event.ID}); errInner != nil {
+						fmt.Printf("Producer.procEvents.Remove: error in worker: %v, eventID: %d, eventType: %v, message: %s\n",
+							workerIdx, event.ID, event.Type, errInner.Error())
+					}
+				})
+			}
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
 func (p *producer) Close() {
-	close(p.done)
+	p.cancel()
 	p.wg.Wait()
 }

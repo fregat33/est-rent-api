@@ -3,11 +3,11 @@ package retranslator
 import (
 	"time"
 
-	"github.com/ozonmp/omp-demo-api/internal/app/consumer"
-	"github.com/ozonmp/omp-demo-api/internal/app/producer"
-	"github.com/ozonmp/omp-demo-api/internal/app/repo"
-	"github.com/ozonmp/omp-demo-api/internal/app/sender"
-	"github.com/ozonmp/omp-demo-api/internal/model"
+	"github.com/ozonmp/est-rent-api/internal/app/consumer"
+	"github.com/ozonmp/est-rent-api/internal/app/producer"
+	"github.com/ozonmp/est-rent-api/internal/app/repo"
+	"github.com/ozonmp/est-rent-api/internal/app/sender"
+	"github.com/ozonmp/est-rent-api/internal/model"
 
 	"github.com/gammazero/workerpool"
 )
@@ -32,14 +32,14 @@ type Config struct {
 }
 
 type retranslator struct {
-	events     chan model.SubdomainEvent
+	events     chan model.RentEvent
 	consumer   consumer.Consumer
 	producer   producer.Producer
 	workerPool *workerpool.WorkerPool
 }
 
 func NewRetranslator(cfg Config) Retranslator {
-	events := make(chan model.SubdomainEvent, cfg.ChannelSize)
+	events := make(chan model.RentEvent, cfg.ChannelSize)
 	workerPool := workerpool.New(cfg.WorkerCount)
 
 	consumer := consumer.NewDbConsumer(
@@ -51,6 +51,7 @@ func NewRetranslator(cfg Config) Retranslator {
 	producer := producer.NewKafkaProducer(
 		cfg.ProducerCount,
 		cfg.Sender,
+		cfg.Repo,
 		events,
 		workerPool)
 
