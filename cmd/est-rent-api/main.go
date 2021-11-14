@@ -4,8 +4,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/ozonmp/omp-demo-api/internal/app/retranslator"
+	"github.com/ozonmp/est-rent-api/internal/app/retranslator"
 )
 
 func main() {
@@ -18,6 +19,7 @@ func main() {
 		ConsumeSize:   10,
 		ProducerCount: 28,
 		WorkerCount:   2,
+		ConsumeTimeout: 1 * time.Second,
 	}
 
 	retranslator := retranslator.NewRetranslator(cfg)
